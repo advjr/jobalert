@@ -2,8 +2,9 @@ import { getJobs } from '../lib/jobs.js';
 import { PROFILE } from '../lib/profile.js';
 
 export async function GET(request) {
-  const force = new URL(request.url).searchParams.has('refresh');
-  const data = await getJobs({ force });
+  const params = new URL(request.url).searchParams;
+  const force = params.has('refresh');
+  const data = await getJobs({ force, country: params.get('country') || 'au' });
   return Response.json(
     { ...data, profile: { name: PROFILE.name, firstName: PROFILE.firstName, email: PROFILE.email, website: PROFILE.website, proofPoints: PROFILE.proofPoints }, ai: Boolean(process.env.ANTHROPIC_API_KEY) },
     {

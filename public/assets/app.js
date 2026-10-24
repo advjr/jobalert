@@ -1,51 +1,48 @@
-// JobAlert dashboard. Leads come live from /api/jobs; your pipeline (saved, contacted,
-// notes, drafts) is kept in this browser's localStorage, so there is no database.
+// JobAlert dashboard: a grid of job and social-post tiles. Clicking a tile opens the original
+// post in a new tab; "Offer" opens the job page (contacts, AI offer, notes) in a new tab.
+// Leads come live from /api/jobs and /api/social; your pipeline lives in localStorage.
 
-const $ = sel => document.querySelector(sel);
-const KEYS = { crm: 'jobalert.crm.v1', seen: 'jobalert.seen.v1', meta: 'jobalert.meta.v1', filters: 'jobalert.filters.v1' };
+import {
+  $, KEYS, COUNTRY_OPTIONS, countryName, STATUS_LABEL, store, reloadCrm, allRecs, rec, statusOf, setStatus, needsFollowUp,
+  peekJob, jobPageUrl, esc, safeUrl, icon, fitClass, ago, toast, boot,
+} from './core.js';
 
-const VIEWS = [
-  { id: 'inbox', label: 'Matches', icon: 'i-inbox' },
-  { id: 'saved', label: 'Saved', icon: 'i-bookmark' },
-  { id: 'contacted', label: 'Contacted', icon: 'i-send' },
-  { id: 'replied', label: 'Replied', icon: 'i-reply' },
-  { id: 'hidden', label: 'Hidden', icon: 'i-eye-off' },
-];
-const STATUS_LABEL = { saved: 'Saved', contacted: 'Contacted', replied: 'Replied', hidden: 'Hidden' };
+const TABS = ['jobs', 'social', 'pipeline'];
+const PIPELINE = ['saved', 'contacted', 'replied', 'hidden'];
+const PLATFORMS = ['LinkedIn', 'Facebook', 'Instagram'];
+const QUICK_TERMS = ['virtual assistant', 'HubSpot', 'GoHighLevel', 'Zapier automation', 'CRM setup', 'Shopify', 'WordPress website', 'Klaviyo email marketing', 'AI automation', 'executive assistant'];
+const LOCAL_BOOST = 15; // how far a job in the chosen country is lifted above worldwide ones in "Best match"
 const DEFAULT_FILTERS = {
+  country: 'au',
+  anywhere: false,
   contact: ['email', 'apply', 'signup'],
   types: ['Project', 'Contract', 'Part-time', 'Full-time', 'Unspecified'],
-  minScore: 35,
+  minScore: 30,
   locOnly: true,
   hasPay: false,
   newOnly: false,
-  days: 14,
+  days: 35,
   sources: null, // null = all
   sort: 'score',
-};
-
-// ---------- storage ----------
-const store = {
-  read(key, fallback) {
-    try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
-  },
-  write(key, value) {
-    try { localStorage.setItem(key, JSON.stringify(value)); } catch { toast('Browser storage is full or blocked: changes will not be kept.'); }
-  },
+  platform: 'all',
+  pipe: 'saved',
 };
 
 const state = {
-  data: null,
-  jobs: new Map(),
-  crm: store.read(KEYS.crm, {}),
-  seen: store.read(KEYS.seen, {}),
-  meta: store.read(KEYS.meta, null),
+  tab: TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'jobs',
   filters: { ...DEFAULT_FILTERS, ...store.read(KEYS.filters, {}) },
-  view: 'inbox',
+  payloads: new Map(), // country -> /api/jobs payload
+  data: null,
+  social: store.read(KEYS.social, {}), // country -> { scannedAt, posts }
+  ai: store.read(KEYS.profile, {}).ai ?? null,
+  scanning: false,
+  loading: false,
   q: '',
-  selectedId: null,
   visible: [],
-  drafting: false,
+  hiddenWorldwide: 0,
+  seen: store.read(KEYS.seen, {}),
+  opened: store.read(KEYS.opened, {}),
+  meta: store.read(KEYS.meta, null),
 };
 if (!state.meta) {
   state.meta = { installedAt: Date.now(), lastVisit: Date.now() };
@@ -53,74 +50,18 @@ if (!state.meta) {
 }
 const previousVisit = state.meta.lastVisit;
 
-// ---------- helpers ----------
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const safeUrl = u => (/^https?:\/\//i.test(u || '') ? u : '#');
-const icon = id => `<svg aria-hidden="true"><use href="#${id}"/></svg>`;
-const fitClass = s => (s >= 70 ? 'great' : s >= 45 ? 'good' : s >= 25 ? 'possible' : 'weak');
+// ---------- data helpers ----------
+const socialPosts = () => state.social[state.filters.country]?.posts || [];
 
-function ago(iso) {
-  if (!iso) return 'date unknown';
-  const mins = (Date.now() - Date.parse(iso)) / 60000;
-  if (mins < 60) return `${Math.max(1, Math.round(mins))}m ago`;
-  if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
-  const d = Math.round(mins / 1440);
-  return d === 1 ? 'yesterday' : `${d}d ago`;
+function liveJobs() {
+  const map = new Map();
+  for (const p of state.payloads.values()) for (const j of p.jobs) map.set(j.id, j);
+  for (const s of Object.values(state.social)) for (const p of s.posts || []) map.set(p.id, p);
+  return map;
 }
 
-function linkify(text) {
-  return esc(text).replace(/https?:\/\/[^\s<)]+/g, u => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
-}
-
-let toastTimer;
-function toast(msg) {
-  const el = $('#toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
-}
-
-async function copy(text, what = 'Copied') {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast(`${what} to clipboard`);
-  } catch {
-    toast('Could not copy. Select the text and copy it manually.');
-  }
-}
-
-// ---------- CRM (localStorage) ----------
-const rec = id => state.crm[id] || {};
-const statusOf = id => rec(id).status || null;
-
-function updateRec(id, patch) {
-  const job = state.jobs.get(id) || rec(id).snapshot;
-  const next = { ...rec(id), ...patch, updatedAt: Date.now() };
-  if (next.status && job) next.snapshot = job; // keep the post even after it drops off the boards
-  if (!next.status && !next.note && !next.draft) delete state.crm[id];
-  else state.crm[id] = next;
-  store.write(KEYS.crm, state.crm);
-}
-
-function setStatus(id, status, { quiet = false } = {}) {
-  const current = statusOf(id);
-  const nextStatus = current === status ? null : status;
-  const patch = { status: nextStatus };
-  if (nextStatus === 'contacted' && !rec(id).contactedAt) patch.contactedAt = Date.now();
-  if (nextStatus === 'replied') patch.repliedAt = Date.now();
-  updateRec(id, patch);
-  if (!quiet) toast(nextStatus ? `Moved to ${STATUS_LABEL[nextStatus]}` : 'Moved back to Matches');
-  render();
-}
-
-// Every job we know about: live ones plus snapshots of tracked ones that have dropped off the feeds.
-function allJobs() {
-  const list = [...state.jobs.values()];
-  for (const [id, r] of Object.entries(state.crm)) {
-    if (r.status && r.snapshot && !state.jobs.has(id)) list.push({ ...r.snapshot, gone: true });
-  }
-  return list;
+function findJob(id) {
+  return liveJobs().get(id) || (rec(id).snapshot && { ...rec(id).snapshot, gone: true }) || null;
 }
 
 const isNew = j => {
@@ -128,11 +69,10 @@ const isNew = j => {
   return first && first > state.meta.installedAt + 60_000 && first >= previousVisit - 1000 && !statusOf(j.id);
 };
 
-// ---------- filtering ----------
-function inView(j, view) {
-  const s = statusOf(j.id);
-  if (view === 'inbox') return !s || s === 'saved';
-  return s === view;
+function inCountry(j, { withAnywhere = state.filters.anywhere } = {}) {
+  const c = state.filters.country;
+  if (c === 'all') return true;
+  return (j.countries || []).includes(c) || (withAnywhere && j.anywhere);
 }
 
 function passesFilters(j) {
@@ -150,57 +90,179 @@ function passesFilters(j) {
 
 function matchesQuery(j) {
   if (!state.q) return true;
-  const hay = `${j.title} ${j.company} ${j.location} ${j.matched.map(m => m.label).join(' ')} ${j.tags.join(' ')} ${j.description}`.toLowerCase();
+  const hay = `${j.title} ${j.company} ${j.location} ${(j.matched || []).map(m => m.label).join(' ')} ${(j.tags || []).join(' ')} ${j.description}`.toLowerCase();
   return state.q.toLowerCase().split(/\s+/).every(w => hay.includes(w));
 }
 
 const CONTACT_RANK = { email: 0, apply: 1, signup: 2 };
 function sortJobs(list) {
   const by = state.filters.sort;
+  const c = state.filters.country;
   const t = j => Date.parse(j.postedAt || 0) || 0;
+  const rank = j => j.score + (c !== 'all' && (j.countries || []).includes(c) ? LOCAL_BOOST : 0);
   return list.sort((a, b) => {
     if (by === 'newest') return t(b) - t(a);
-    if (by === 'contact') return CONTACT_RANK[a.contactMethod] - CONTACT_RANK[b.contactMethod] || b.score - a.score;
-    if (by === 'pay') return (b.salary ? 1 : 0) - (a.salary ? 1 : 0) || b.score - a.score;
-    return b.score - a.score || t(b) - t(a);
+    if (by === 'contact') return CONTACT_RANK[a.contactMethod] - CONTACT_RANK[b.contactMethod] || rank(b) - rank(a);
+    if (by === 'pay') return (b.salary ? 1 : 0) - (a.salary ? 1 : 0) || rank(b) - rank(a);
+    return rank(b) - rank(a) || t(b) - t(a);
   });
 }
 
+function trackedJobs(status) {
+  const live = liveJobs();
+  return Object.entries(allRecs())
+    .filter(([, r]) => r.status === status)
+    .map(([id, r]) => live.get(id) || (r.snapshot && { ...r.snapshot, gone: true }))
+    .filter(Boolean);
+}
+
+const inbox = j => !statusOf(j.id) || statusOf(j.id) === 'saved';
+
 function computeVisible() {
-  const jobs = allJobs();
-  // Pipeline views show everything you have tracked; only Matches applies the filters.
-  const base = jobs.filter(j => inView(j, state.view) && matchesQuery(j));
-  state.visible = sortJobs(state.view === 'inbox' ? base.filter(passesFilters) : base);
+  state.hiddenWorldwide = 0;
+  if (state.tab === 'pipeline') {
+    state.visible = sortJobs(trackedJobs(state.filters.pipe).filter(matchesQuery));
+  } else if (state.tab === 'social') {
+    const p = state.filters.platform;
+    state.visible = sortJobs(
+      socialPosts().filter(j => inbox(j) && matchesQuery(j) && inCountry(j, { withAnywhere: true }) && (p === 'all' || (p === 'Other' ? !PLATFORMS.includes(j.platform) : j.platform === p))),
+    );
+  } else {
+    const base = (state.data?.jobs || []).filter(j => inbox(j) && matchesQuery(j) && passesFilters(j));
+    state.visible = sortJobs(base.filter(j => inCountry(j)));
+    if (!state.filters.anywhere && state.filters.country !== 'all') state.hiddenWorldwide = base.filter(j => !inCountry(j) && j.anywhere).length;
+  }
 }
 
 // ---------- rendering ----------
 function render() {
   computeVisible();
-  renderViews();
-  renderSources();
+  renderChrome();
   renderSummary();
-  renderList();
-  renderDetail();
-  saveFilters();
+  renderGrid();
+  store.write(KEYS.filters, state.filters);
 }
 
-function renderViews() {
-  const jobs = allJobs();
-  const newCount = state.view === 'inbox' ? state.visible.filter(isNew).length : 0;
-  $('#views').innerHTML = VIEWS.map((v, i) => {
-    const count = v.id === 'inbox' ? (state.view === 'inbox' ? state.visible.length : jobs.filter(j => inView(j, 'inbox') && passesFilters(j)).length) : jobs.filter(j => inView(j, v.id)).length;
-    const followUps = v.id === 'contacted' ? jobs.filter(needsFollowUp).length : 0;
-    return `<button class="view-btn ${state.view === v.id ? 'active' : ''}" data-view="${v.id}" title="Press ${i + 1}">
-      ${icon(v.icon)}<span>${v.label}</span>
-      ${v.id === 'inbox' && newCount ? `<span class="badge-dot" title="New since your last visit">${newCount}</span>` : ''}
-      ${followUps ? `<span class="badge-dot" title="Due a follow-up">${followUps}</span>` : ''}
-      <span class="count">${count}</span></button>`;
-  }).join('');
+function renderChrome() {
+  const f = state.filters;
+  document.body.dataset.tab = state.tab;
+  document.querySelectorAll('.tab').forEach(t => {
+    const on = t.dataset.tab === state.tab;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on);
+  });
+  const jobsCount = (state.data?.jobs || []).filter(j => inbox(j) && passesFilters(j) && inCountry(j)).length;
+  const socialCount = socialPosts().filter(j => inbox(j) && inCountry(j, { withAnywhere: true })).length;
+  const tracked = Object.values(allRecs()).filter(r => r.status && r.status !== 'hidden').length;
+  $('#n-jobs').textContent = state.data ? jobsCount : '';
+  $('#n-social').textContent = socialCount || '';
+  $('#n-pipeline').textContent = tracked || '';
+
+  $('#anywhere').checked = f.anywhere;
+  $('#anywhere-wrap').hidden = state.tab !== 'jobs' || f.country === 'all';
+  $('.country-pick').hidden = state.tab === 'pipeline';
+  $('#btn-filters').hidden = state.tab !== 'jobs';
+  $('#social-panel').hidden = state.tab !== 'social';
+
+  const pipeSeg = $('#pipeline-seg');
+  pipeSeg.hidden = state.tab !== 'pipeline';
+  if (!pipeSeg.hidden) {
+    pipeSeg.innerHTML = PIPELINE.map(s => {
+      const n = trackedJobs(s).length;
+      const due = s === 'contacted' ? trackedJobs(s).filter(j => needsFollowUp(j.id)).length : 0;
+      return `<button class="${f.pipe === s ? 'on' : ''}" data-pipe="${s}">${STATUS_LABEL[s]}<span class="n">${n}</span>${due ? `<span class="due" title="Due a follow-up">${due}</span>` : ''}</button>`;
+    }).join('');
+  }
+
+  const platSeg = $('#platform-seg');
+  platSeg.hidden = state.tab !== 'social';
+  if (!platSeg.hidden) {
+    const posts = socialPosts();
+    const count = p => posts.filter(j => (p === 'all' ? true : p === 'Other' ? !PLATFORMS.includes(j.platform) : j.platform === p)).length;
+    platSeg.innerHTML = ['all', ...PLATFORMS, 'Other']
+      .map(p => `<button class="${f.platform === p ? 'on' : ''}" data-platform="${p}">${p === 'all' ? 'All' : p}<span class="n">${count(p)}</span></button>`)
+      .join('');
+    renderSocialPanel();
+  }
+
+  const changed = ['contact', 'types', 'minScore', 'locOnly', 'hasPay', 'newOnly', 'days', 'sources'].filter(k => JSON.stringify(f[k]) !== JSON.stringify(DEFAULT_FILTERS[k])).length;
+  $('#filter-count').hidden = !changed;
+  $('#filter-count').textContent = changed;
 }
 
-function needsFollowUp(j) {
-  const r = rec(j.id);
-  return r.status === 'contacted' && r.contactedAt && Date.now() - r.contactedAt > 4 * 86400_000;
+function renderSummary() {
+  const el = $('#summary');
+  if (state.tab === 'jobs' && !state.data) { el.textContent = state.loading ? `Pulling jobs for ${countryName(state.filters.country)}…` : ''; return; }
+  const v = state.visible;
+  const parts = [`<strong>${v.length}</strong> ${state.tab === 'social' ? 'posts' : 'leads'}`];
+  if (state.tab === 'jobs') {
+    const great = v.filter(j => j.score >= 70).length;
+    if (great) parts.push(`<strong>${great}</strong> great fits`);
+    if (state.hiddenWorldwide) parts.push(`<button class="link" data-action="show-anywhere">+${state.hiddenWorldwide} worldwide remote</button>`);
+  }
+  el.innerHTML = parts.join(' · ');
+}
+
+function tile(j) {
+  const s = statusOf(j.id);
+  const fc = fitClass(j.score);
+  const social = j.kind === 'social';
+  const country = state.filters.country;
+  const cc = (j.countries || []).includes(country) ? country : (j.countries || [])[0];
+  const meta = [];
+  if (j.salary) meta.push(`<span class="pill pay" title="${esc(j.salary)}">${esc(j.salary)}</span>`);
+  if (!social && j.type !== 'Unspecified') meta.push(`<span class="pill">${esc(j.type)}</span>`);
+  if (j.contactMethod === 'email') meta.push(`<span class="pill mail" title="Email in the post">${icon('i-mail')}Email</span>`);
+  if (j.contacts?.phones?.length) meta.push(`<span class="pill mail" title="Phone in the post">${icon('i-phone')}</span>`);
+  if (j.locationFit === 'restricted') meta.push(`<span class="pill warn" title="${esc(j.location)}">Location locked</span>`);
+  if (s && s !== 'hidden') meta.push(`<span class="pill status">${STATUS_LABEL[s]}</span>`);
+  if (needsFollowUp(j.id)) meta.push(`<span class="pill warn">Follow up</span>`);
+  if (j.gone) meta.push(`<span class="pill">No longer listed</span>`);
+  const snippet = social ? (j.description || '').split('\n').find(Boolean) : '';
+
+  return `<article class="tile${state.opened[j.id] ? ' viewed' : ''}${s === 'hidden' ? ' dim' : ''}" data-id="${esc(j.id)}">
+    <div class="tile-top">
+      <span class="score fit-${fc}" title="${esc(j.fit)} for your skills">${j.score}<small>match</small></span>
+      ${cc ? `<span class="cc" title="${esc(countryName(cc))}">${cc.toUpperCase()}</span>` : j.anywhere ? '<span class="cc" title="Open to most countries">Remote</span>' : ''}
+      ${isNew(j) ? '<span class="new">New</span>' : ''}
+      <span class="src">${esc(j.sourceLabel)} · ${ago(j.postedAt)}</span>
+    </div>
+    <h3><a class="tile-link" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener noreferrer" data-open>${esc(j.title)}</a></h3>
+    <p class="company">${esc(j.company || 'Company not named')}${j.location ? ` · ${esc(j.location)}` : ''}</p>
+    ${snippet ? `<p class="snippet">${esc(snippet)}</p>` : ''}
+    <div class="tile-foot">
+      <div class="meta">${meta.join('')}</div>
+      <div class="tile-actions">
+        <button class="icon-btn sm${s === 'saved' ? ' on' : ''}" data-act="saved" title="${s === 'saved' ? 'Saved' : 'Save'}" aria-label="Save">${icon('i-bookmark')}</button>
+        <a class="btn btn-sm" href="${jobPageUrl(j.id)}" target="_blank" rel="noopener" data-act="offer" title="Contacts, offer draft and notes">${icon('i-spark')}Offer</a>
+        <button class="icon-btn sm${s === 'hidden' ? ' on' : ''}" data-act="hidden" title="${s === 'hidden' ? 'Unhide' : 'Not a fit'}" aria-label="Hide">${icon('i-x')}</button>
+      </div>
+    </div>
+  </article>`;
+}
+
+function renderGrid() {
+  const el = $('#grid');
+  if (state.tab === 'jobs' && !state.data) {
+    el.innerHTML = state.loading ? Array.from({ length: 12 }, () => '<div class="tile skeleton"></div>').join('') : '';
+    return;
+  }
+  if (!state.visible.length) {
+    const msg = {
+      jobs: ['No jobs match these filters', state.hiddenWorldwide ? 'Turn on "Worldwide remote too", pick another country, or reset the filters.' : 'Pick another country, lower the minimum match, or reset the filters.'],
+      social: state.scanning ? ['Scanning…', 'Claude is searching LinkedIn, Facebook and Instagram posts. This takes a minute or two.'] : ['No posts yet', state.ai === false ? 'The AI scan needs ANTHROPIC_API_KEY. Meanwhile, use the quick searches above.' : 'Press "Scan with AI" to look for fresh posts, or use the quick searches above.'],
+      pipeline: {
+        saved: ['Nothing saved yet', 'Use the bookmark on a tile to keep it here.'],
+        contacted: ['No one contacted yet', 'Sending an offer from the job page moves it here.'],
+        replied: ['No replies tracked yet', 'Mark a lead as Replied on its job page when they answer.'],
+        hidden: ['Nothing hidden', 'Hide tiles that are not a fit to keep the grid clean.'],
+      }[state.filters.pipe],
+    }[state.tab];
+    el.innerHTML = `<div class="empty"><h3>${msg[0]}</h3><p>${msg[1]}</p>${state.tab === 'jobs' ? '<button class="btn" data-action="reset">Reset filters</button>' : ''}</div>`;
+    return;
+  }
+  el.innerHTML = state.visible.slice(0, 300).map(tile).join('') +
+    (state.visible.length > 300 ? '<div class="empty">Showing the top 300. Raise the minimum match to narrow it down.</div>' : '');
 }
 
 function renderSources() {
@@ -213,349 +275,135 @@ function renderSources() {
     </label>${s.note ? `<div class="src-note">${esc(s.note)}</div>` : ''}`).join('');
 }
 
-function renderSummary() {
-  const v = state.visible;
-  if (!state.data) { $('#summary').textContent = 'Loading leads…'; return; }
-  const emails = v.filter(j => j.contactMethod === 'email').length;
-  const great = v.filter(j => j.score >= 70).length;
-  $('#summary').innerHTML = `<strong>${v.length}</strong> leads · <strong>${great}</strong> great fits · <strong>${emails}</strong> with email`;
-}
-
-function card(j) {
-  const s = statusOf(j.id);
-  const fc = fitClass(j.score);
-  const pills = [];
-  if (j.salary) pills.push(`<span class="pill pay">${esc(j.salary)}</span>`);
-  pills.push(`<span class="pill">${esc(j.type === 'Unspecified' ? 'Type not stated' : j.type)}</span>`);
-  if (j.contactMethod === 'email') pills.push(`<span class="pill mail">${icon('i-mail')}Email</span>`);
-  else if (j.contactMethod === 'apply') pills.push(`<span class="pill apply">${icon('i-link')}Apply link</span>`);
-  else pills.push(`<span class="pill lock">${icon('i-lock')}Sign-up</span>`);
-  if (j.contacts.phones.length) pills.push(`<span class="pill mail">${icon('i-phone')}Phone</span>`);
-  if (j.locationFit === 'restricted') pills.push(`<span class="pill warn">Location locked</span>`);
-  if (isNew(j)) pills.push(`<span class="pill new">New</span>`);
-  if (s) pills.push(`<span class="pill status">${STATUS_LABEL[s]}</span>`);
-  if (needsFollowUp(j)) pills.push(`<span class="pill warn">Follow up</span>`);
-  if (j.gone) pills.push(`<span class="pill">No longer listed</span>`);
-
-  return `<button class="card ${state.selectedId === j.id ? 'selected' : ''} ${s === 'hidden' ? 'dim' : ''}" data-id="${esc(j.id)}" role="option" aria-selected="${state.selectedId === j.id}">
-    <div class="card-top">
-      <span class="score fit-${fc}"><b>${j.score}</b>${esc(j.fit)}</span>
-      <span class="right">${esc(j.sourceLabel)} · ${ago(j.postedAt)}</span>
-    </div>
-    <h4>${esc(j.title)}</h4>
-    <div class="company">${esc(j.company || 'Company not named')}${j.location ? ` · ${esc(j.location)}` : ''}</div>
-    <div class="row">${pills.join('')}</div>
-    ${j.matched.length ? `<div class="skills">Matches: ${esc(j.matched.map(m => m.label).join(', '))}</div>` : ''}
-  </button>`;
-}
-
-function renderList() {
-  const el = $('#list');
-  if (!state.data) {
-    el.innerHTML = Array.from({ length: 6 }, () => '<div class="skeleton"></div>').join('');
-    return;
-  }
-  if (!state.visible.length) {
-    const msg = {
-      inbox: ['No leads match these filters', 'Lower the minimum match, widen "Posted within", or reset the filters.'],
-      saved: ['Nothing saved yet', 'Press S on a lead (or the Save button) to keep it here.'],
-      contacted: ['No one contacted yet', 'When you send an offer from a lead it moves here automatically.'],
-      replied: ['No replies tracked yet', 'Mark a contacted lead as Replied when they answer.'],
-      hidden: ['Nothing hidden', 'Hide leads that are not a fit to keep Matches clean.'],
-    }[state.view];
-    el.innerHTML = `<div class="empty"><h3>${msg[0]}</h3><p>${msg[1]}</p>${state.view === 'inbox' ? '<button class="btn" data-action="reset">Reset filters</button>' : ''}</div>`;
-    return;
-  }
-  el.innerHTML = state.visible.slice(0, 400).map(card).join('') +
-    (state.visible.length > 400 ? `<div class="empty">Showing the top 400. Raise the minimum match to narrow it down.</div>` : '');
-}
-
-function contactRows(j) {
-  const rows = [];
-  for (const e of j.contacts.emails) {
-    rows.push(`<div class="contact-row"><div class="what">${icon('i-mail')}<span class="lbl">Email</span><span>${esc(e)}</span></div>
-      <div class="tools"><button class="btn btn-sm" data-copy="${esc(e)}">${icon('i-copy')}Copy</button>
-      <button class="btn btn-sm btn-primary" data-action="draft-to" data-email="${esc(e)}">${icon('i-spark')}Write offer</button></div></div>`);
-  }
-  for (const p of j.contacts.phones) {
-    rows.push(`<div class="contact-row"><div class="what">${icon('i-phone')}<span class="lbl">Phone</span><span>${esc(p.display)}</span></div>
-      <div class="tools"><button class="btn btn-sm" data-copy="${esc(p.display)}">${icon('i-copy')}Copy</button>
-      <a class="btn btn-sm" target="_blank" rel="noopener" href="https://wa.me/${esc(p.digits)}?text=${encodeURIComponent(`Hi, I saw your post for "${j.title}" and I'd love to help. Is it still open?`)}">${icon('i-whatsapp')}WhatsApp</a></div></div>`);
-  }
-  for (const l of j.contacts.links) {
-    rows.push(`<div class="contact-row"><div class="what">${icon('i-link')}<span class="lbl">${esc(l.kind)}</span><span>${esc(l.url)}</span></div>
-      <div class="tools"><a class="btn btn-sm" target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(l.url))}">Open</a></div></div>`);
-  }
-  if (j.applyUrl && j.applyUrl !== j.url) {
-    rows.push(`<div class="contact-row"><div class="what">${icon('i-link')}<span class="lbl">Apply</span><span>${esc(j.applyUrl)}</span></div>
-      <div class="tools"><a class="btn btn-sm" target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(j.applyUrl))}">Open</a></div></div>`);
-  }
-  rows.push(`<div class="contact-row"><div class="what">${icon('i-link')}<span class="lbl">Job post</span><span>${esc(j.sourceLabel)}</span></div>
-    <div class="tools"><a class="btn btn-sm" target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(j.url))}">Open post</a></div></div>`);
-  return rows.join('');
-}
-
-function renderDetail() {
-  const el = $('#detail');
-  const j = state.selectedId && (state.jobs.get(state.selectedId) || (rec(state.selectedId).snapshot && { ...rec(state.selectedId).snapshot, gone: true }));
-  if (!j) {
-    document.body.classList.remove('detail-open');
-    el.dataset.id = '';
-    el.innerHTML = `<div class="detail-empty"><div>${icon('i-inbox')}<h3>Pick a lead</h3><p>Select a lead on the left to see contacts, requirements and an offer draft.<br>Use <kbd>j</kbd> and <kbd>k</kbd> to move through the list.</p></div></div>`;
-    return;
-  }
-  const s = statusOf(j.id);
-  const r = rec(j.id);
-  // Only rebuild when something shown here changed, so typing and scrolling are never interrupted.
-  const sig = `${j.id}|${s}|${r.contactedAt || ''}|${state.drafting}|${Boolean(r.draft)}|${state.data?.ai}`;
-  if (el.dataset.id === sig) return;
-  if (el.dataset.id?.startsWith(`${j.id}|`) && el.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return;
-  el.dataset.id = sig;
-  const fc = fitClass(j.score);
-  const draft = r.draft || null;
-  const groups = {};
-  for (const m of j.matched) (groups[m.group] ||= []).push(m);
-
-  el.innerHTML = `<article class="detail">
-    <button class="btn btn-sm detail-back" data-action="close-detail">${icon('i-back')}Back to list</button>
-    <div class="d-head">
-      <div class="ring" style="--p:${j.score};--c:var(--${fc})"><span>${j.score}</span></div>
-      <div class="d-title">
-        <h2>${esc(j.title)}</h2>
-        <div class="company">${esc(j.company || 'Company not named')}</div>
-        <div class="fitline fit-${fc}">${esc(j.fit)} for your skills${j.gone ? ' · no longer listed on the board' : ''}</div>
-      </div>
-    </div>
-
-    <div class="facts">
-      <div class="fact"><div class="k">Pay / offer</div><div class="v">${esc(j.salary || 'Not stated')}</div></div>
-      <div class="fact"><div class="k">Type</div><div class="v">${esc(j.type === 'Unspecified' ? 'Not stated' : j.type)}</div></div>
-      <div class="fact"><div class="k">Location</div><div class="v">${esc(j.location || 'Not stated')}</div></div>
-      <div class="fact"><div class="k">Posted</div><div class="v">${ago(j.postedAt)} · ${esc(j.sourceLabel)}</div></div>
-      ${j.meta?.bids != null ? `<div class="fact"><div class="k">Bids so far</div><div class="v">${j.meta.bids}</div></div>` : ''}
-    </div>
-
-    <div class="actions">
-      <button class="btn ${s === 'saved' ? 'is-on' : ''}" data-status="saved">${icon('i-bookmark')}${s === 'saved' ? 'Saved' : 'Save'}</button>
-      <button class="btn ${s === 'contacted' ? 'is-on' : ''}" data-status="contacted">${icon('i-send')}${s === 'contacted' ? 'Contacted' : 'Mark contacted'}</button>
-      <button class="btn ${s === 'replied' ? 'is-on' : ''}" data-status="replied">${icon('i-reply')}${s === 'replied' ? 'Replied' : 'They replied'}</button>
-      <button class="btn ${s === 'hidden' ? 'is-on' : ''}" data-status="hidden">${icon('i-eye-off')}${s === 'hidden' ? 'Hidden' : 'Not a fit'}</button>
-      <a class="btn" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener noreferrer">${icon('i-link')}Open post</a>
-    </div>
-    ${r.contactedAt ? `<div class="meta-line">Contacted ${new Date(r.contactedAt).toLocaleDateString()}${r.contactedVia ? ` via ${esc(r.contactedVia)}` : ''}${needsFollowUp(j) ? ' · due a follow-up' : ''}</div>` : ''}
-
-    <section class="block">
-      <h3>How to reach them</h3>
-      ${j.signupRequired ? `<div class="callout" style="margin-bottom:10px">${icon('i-lock')}<div>${esc(j.sourceLabel)} only lets you reply after signing up. The offer below still works as your bid text.</div></div>` : ''}
-      ${!j.contacts.emails.length && !j.signupRequired ? `<div class="callout" style="margin-bottom:10px">${icon('i-link')}<div>No email in the post. Apply through the link (usually no account needed), or find the company's email on their website and send the offer below.</div></div>` : ''}
-      <div class="contact-card">${contactRows(j)}</div>
-    </section>
-
-    <section class="block">
-      <h3>Why it matches you</h3>
-      ${j.matched.length ? Object.entries(groups).map(([g, ms]) => `<div class="tags" style="margin-bottom:6px">${ms.map(m => `<span class="tag ${m.inTitle ? 'title-hit' : ''}" title="${m.inTitle ? 'In the job title' : 'In the description'}">${esc(m.label)}</span>`).join('')}</div>`).join('') : '<p class="muted">No direct skill keywords found.</p>'}
-      ${j.warnings.length ? `<div class="warns">${j.warnings.map(w => `<div class="callout">${esc(w)}</div>`).join('')}</div>` : ''}
-    </section>
-
-    ${j.requirements.length ? `<section class="block"><h3>Requirements</h3><ul class="reqs">${j.requirements.map(x => `<li>${esc(x)}</li>`).join('')}</ul></section>` : ''}
-
-    <section class="block">
-      <h3>Description</h3>
-      <div class="desc clamped" id="desc">${linkify(j.description)}</div>
-      <button class="btn btn-sm" data-action="toggle-desc" style="margin-top:8px">Show full description</button>
-    </section>
-
-    <section class="block" id="composer-block">
-      <h3>${icon('i-spark')}Your offer</h3>
-      <div class="composer">
-        <div class="composer-top">
-          <button class="btn btn-primary" data-action="draft" ${state.drafting ? 'disabled' : ''}>${icon('i-spark')}${state.drafting ? 'Writing…' : draft ? 'Rewrite with AI' : state.data?.ai ? 'Draft offer with AI' : 'Draft offer'}</button>
-          <span class="muted" style="font-size:12px">${state.data?.ai ? 'Claude reads the post and writes a tailored email.' : 'AI is off, so this uses a smart template. Add ANTHROPIC_API_KEY to turn on AI.'}</span>
-        </div>
-        <details class="extra"><summary>Add a note for this draft (optional)</summary>
-          <div class="field"><input id="extra" placeholder="e.g. mention I can start Monday, quote A$45/hr" value="${esc(r.extra || '')}"></div>
-        </details>
-        ${draft?.ai ? aiResult(draft.ai) : ''}
-        ${draft ? composerFields(j, draft) : ''}
-      </div>
-    </section>
-
-    <section class="block">
-      <h3>Notes</h3>
-      <textarea class="note-area" id="note" placeholder="Private notes: who you spoke to, follow-up date, rate quoted…">${esc(r.note || '')}</textarea>
-    </section>
-  </article>`;
-}
-
-function aiResult(ai) {
-  return `<div class="ai-result">
-    <div><span class="verdict">${esc(ai.verdict)}</span> · AI fit ${ai.fit_score}/100</div>
-    <div class="muted" style="margin-top:2px">${esc(ai.pitch_angle)}</div>
-    <div class="cols">
-      <div><strong>Why you fit</strong><ul>${ai.why_you_fit.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
-      <div><strong>Watch out for</strong>${ai.concerns.length ? `<ul>${ai.concerns.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '<p class="muted" style="margin:6px 0 0">Nothing flagged.</p>'}</div>
-    </div>
-  </div>`;
-}
-
-function composerFields(j, d) {
-  const emails = j.contacts.emails;
-  return `
-    <label class="field"><span>To</span>
-      <input id="to" list="to-list" value="${esc(d.to || emails[0] || '')}" placeholder="${emails.length ? '' : 'No email in the post: paste one, or copy the text into their form'}">
-      <datalist id="to-list">${emails.map(e => `<option value="${esc(e)}">`).join('')}</datalist>
-    </label>
-    <label class="field"><span>Subject</span><input id="subject" value="${esc(d.subject)}"></label>
-    <label class="field"><span>Message</span><textarea id="body">${esc(d.body)}</textarea></label>
-    <div class="send-row">
-      <button class="btn btn-primary" data-send="gmail">${icon('i-send')}Send with Gmail</button>
-      <button class="btn" data-send="mailto">${icon('i-mail')}Open in mail app</button>
-      <button class="btn" data-send="copy">${icon('i-copy')}Copy message</button>
-      ${!emails.length ? `<a class="btn" data-send="apply" href="${esc(safeUrl(j.applyUrl || j.url))}" target="_blank" rel="noopener noreferrer">${icon('i-link')}Copy + open ${j.signupRequired ? 'bid page' : 'apply page'}</a>` : ''}
-    </div>
-    <div class="meta-line">Sending marks this lead as Contacted. Gmail opens a ready-to-send compose window as ${esc(state.data?.profile?.email || 'you')}.</div>`;
-}
-
-// ---------- offer drafting ----------
-function templateDraft(j) {
-  const p = state.data.profile;
-  const skills = j.matched.map(m => m.label).filter(l => !/^(AI \/ LLMs|Automation|CRM|Webhooks)/.test(l)).slice(0, 3);
-  const proofs = (p.proofPoints || []).filter(pp => j.matched.some(m => pp.toLowerCase().includes(m.label.split(/[ /]/)[0].toLowerCase()))).slice(0, 2);
-  const who = j.company && !/freelancer\.com client/i.test(j.company) ? `Hi ${j.company} team,` : 'Hi there,';
-  const lines = [
-    who,
-    '',
-    `I saw your post for ${j.title} and it lines up closely with the work I do every week${skills.length ? `: ${joinList(skills)}` : ''}.`,
-    '',
-    proofs.length ? `A couple of recent examples: ${proofs.map(x => (/^[A-Z][a-z]/.test(x) ? x.charAt(0).toLowerCase() + x.slice(1) : x)).join('; ')}.` : `I help small and mid-size businesses connect their CRM, website and automations so leads stop slipping through the cracks.`,
-    '',
-    j.type === 'Full-time'
-      ? `I work as a remote contractor from the Philippines (AU, SG and UAE clients), so I can take this on part-time or as a fixed-scope project if that suits you.`
-      : `I work remotely from the Philippines with clients in Australia, Singapore and the UAE, and I can start this week.`,
-    '',
-    `Would a quick 15-minute call work? If it's easier, I can send a short Loom walkthrough of how I'd set this up first.`,
-    '',
-    'Best,',
-    p.name,
-    `Antheon · ${p.website}`,
-    p.email,
+// ---------- social panel ----------
+function quickLinks(term) {
+  const c = state.filters.country;
+  const place = c === 'all' ? '' : countryName(c);
+  const e = encodeURIComponent;
+  const ask = `looking for ${term} ${place}`.trim();
+  const fbRecent = btoa(JSON.stringify({ 'recent_posts:0': JSON.stringify({ name: 'recent_posts', args: '' }) }));
+  return [
+    ['LinkedIn posts', `https://www.linkedin.com/search/results/content/?keywords=${e(ask)}&sortBy=%22date_posted%22&datePosted=%22past-week%22`],
+    ['Facebook posts', `https://www.facebook.com/search/posts/?q=${e(ask)}&filters=${e(fbRecent)}`],
+    ['Facebook groups', `https://www.facebook.com/search/groups/?q=${e(`${place} small business owners`.trim())}`],
+    ['Instagram', `https://www.instagram.com/explore/search/keyword/?q=${e(`hiring ${term}`)}`],
+    ['X', `https://x.com/search?q=${e(`"looking for" ${term} ${place}`.trim())}&f=live`],
+    ['Google (indexed posts)', `https://www.google.com/search?q=${e(`(site:linkedin.com/posts OR site:facebook.com/groups OR site:instagram.com) ("looking for" OR "anyone recommend" OR "hiring") "${term}" ${place}`.trim())}&tbs=qdr:m`],
   ];
-  return { subject: `Re: ${j.title}`.slice(0, 90), body: lines.join('\n'), to: j.contacts.emails[0] || '' };
 }
 
-const joinList = a => (a.length < 2 ? a.join('') : `${a.slice(0, -1).join(', ')} and ${a.at(-1)}`);
+function renderSocialPanel() {
+  const scan = state.social[state.filters.country];
+  const where = countryName(state.filters.country);
+  let note;
+  if (state.ai === false) note = 'The AI scan is off: add ANTHROPIC_API_KEY to turn it on.';
+  else if (state.scanning) note = `Searching public posts for ${where}. This takes a minute or two…`;
+  else if (scan?.scannedAt) note = `Last scan for ${where}: ${ago(scan.scannedAt)}, ${scan.posts.length} posts found. Each scan costs roughly US$0.30 to US$0.80 in API credit.`;
+  else note = `Claude searches public LinkedIn, Facebook group and Instagram posts that search engines have indexed. Each scan costs roughly US$0.30 to US$0.80 in API credit.`;
+  $('#scan-note').textContent = note;
+  const btn = $('#btn-scan');
+  btn.disabled = state.scanning || state.ai === false;
+  btn.classList.toggle('spinning', state.scanning);
+  btn.querySelector('span').textContent = state.scanning ? 'Scanning…' : scan?.scannedAt ? 'Scan again' : 'Scan with AI';
+  const sel = $('#quick-q');
+  if (!sel.options.length) sel.innerHTML = QUICK_TERMS.map(t => `<option>${esc(t)}</option>`).join('');
+  $('#quick-links').innerHTML = quickLinks(sel.value)
+    .map(([label, url]) => `<a class="btn btn-sm" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${icon('i-link')}${esc(label)}</a>`)
+    .join('');
+}
 
-async function draftOffer(id, toEmail) {
-  const j = state.jobs.get(id) || rec(id).snapshot;
-  if (!j || state.drafting) return;
-  const extra = $('#extra')?.value || '';
-  updateRec(id, { extra });
-
-  if (!state.data.ai) {
-    const d = templateDraft(j);
-    if (toEmail) d.to = toEmail;
-    updateRec(id, { draft: d });
-    forceDetail();
-    focusComposer();
-    return;
-  }
-
-  state.drafting = true;
-  forceDetail();
+async function scanSocial() {
+  const country = state.filters.country;
+  state.scanning = true;
+  render();
   try {
-    const res = await fetch('/api/proposal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ job: j, extra }),
-    });
+    const res = await fetch('/api/social', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country }) });
     const data = await res.json().catch(() => ({}));
+    if (res.status === 503) state.ai = false;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    updateRec(id, { draft: { subject: data.subject, body: data.body, to: toEmail || j.contacts.emails[0] || '', ai: data } });
+    saveScan(country, data);
+    toast(`${data.posts.length} posts found`);
   } catch (err) {
-    toast(`AI draft failed (${err.message}). Using the template.`);
-    const d = templateDraft(j);
-    if (toEmail) d.to = toEmail;
-    updateRec(id, { draft: d });
+    toast(`Scan failed: ${err.message}`);
   } finally {
-    state.drafting = false;
-    forceDetail();
-    focusComposer();
-  }
-}
-
-function forceDetail() {
-  $('#detail').dataset.id = '';
-  renderDetail();
-}
-
-function focusComposer() {
-  $('#composer-block')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-function currentDraft() {
-  return { to: $('#to')?.value.trim() || '', subject: $('#subject')?.value || '', body: $('#body')?.value || '' };
-}
-
-function sendDraft(kind, id) {
-  const j = state.jobs.get(id) || rec(id).snapshot;
-  const d = currentDraft();
-  updateRec(id, { draft: { ...rec(id).draft, ...d } });
-
-  if (kind === 'copy') return copy(`${d.subject}\n\n${d.body}`, 'Message copied');
-  if (kind === 'apply') {
-    copy(d.body, 'Message copied');
-  } else {
-    if (!d.to) { toast('Add an email address in the To field first.'); $('#to')?.focus(); return false; }
-    const url = kind === 'gmail'
-      ? `https://mail.google.com/mail/?view=cm&fs=1&authuser=${encodeURIComponent(state.data.profile.email)}&to=${encodeURIComponent(d.to)}&su=${encodeURIComponent(d.subject)}&body=${encodeURIComponent(d.body)}`
-      : `mailto:${encodeURIComponent(d.to)}?subject=${encodeURIComponent(d.subject)}&body=${encodeURIComponent(d.body)}`;
-    window.open(url, kind === 'gmail' ? '_blank' : '_self', 'noopener');
-  }
-  if (statusOf(id) !== 'contacted' && statusOf(id) !== 'replied') {
-    updateRec(id, { status: 'contacted', contactedAt: Date.now(), contactedVia: kind === 'gmail' ? 'Gmail' : kind === 'mailto' ? 'email' : j?.signupRequired ? 'platform bid' : 'apply form' });
-    toast('Marked as Contacted');
+    state.scanning = false;
     render();
   }
+}
+
+function saveScan(country, data) {
+  state.social[country] = { scannedAt: data.scannedAt, posts: data.posts };
+  markSeen(data.posts);
+  store.write(KEYS.social, state.social);
+}
+
+// The server may hold a newer scan than this browser (for example one run from another device).
+async function syncSocial() {
+  const country = state.filters.country;
+  try {
+    const res = await fetch(`/api/social?country=${country}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    state.ai = data.ai;
+    const mine = state.social[country]?.scannedAt;
+    if (data.scannedAt && (!mine || Date.parse(data.scannedAt) > Date.parse(mine))) saveScan(country, data);
+    render();
+  } catch {}
 }
 
 // ---------- data ----------
-async function load({ force = false } = {}) {
+function markSeen(jobs) {
+  const now = Date.now();
+  for (const j of jobs) if (!state.seen[j.id]) state.seen[j.id] = now;
+  for (const [id, t] of Object.entries(state.seen)) if (now - t > 60 * 86400_000) delete state.seen[id];
+  store.write(KEYS.seen, state.seen);
+}
+
+async function load({ force = false, refetch = false } = {}) {
+  const country = state.filters.country;
+  if (!force && !refetch && state.payloads.has(country)) {
+    state.data = state.payloads.get(country);
+    renderSources();
+    return render();
+  }
   const btn = $('#btn-refresh');
   btn.disabled = true;
   btn.classList.add('spinning');
+  state.loading = true;
+  if (!state.payloads.has(country)) state.data = null;
+  render();
   try {
-    const res = await fetch(force ? `/api/jobs?refresh=${Date.now()}` : '/api/jobs');
+    const res = await fetch(`/api/jobs?country=${country}${force ? `&refresh=${Date.now()}` : ''}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    state.payloads.set(country, data);
+    if (state.filters.country !== country) return; // switched country while this was loading
     state.data = data;
-    state.jobs = new Map(data.jobs.map(j => [j.id, j]));
-
-    const now = Date.now();
-    for (const j of data.jobs) if (!state.seen[j.id]) state.seen[j.id] = now;
-    // Forget ids not seen for 60 days so storage stays small.
-    for (const [id, t] of Object.entries(state.seen)) if (now - t > 60 * 86400_000 && !state.jobs.has(id)) delete state.seen[id];
-    store.write(KEYS.seen, state.seen);
-    store.write(KEYS.meta, { ...state.meta, lastVisit: now });
-
-    $('#updated').textContent = `Updated ${new Date(data.generatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    state.ai = data.ai;
+    store.write(KEYS.profile, { profile: data.profile, ai: data.ai });
+    markSeen(data.jobs);
+    store.write(KEYS.meta, { ...state.meta, lastVisit: Date.now() });
     const failed = data.sources.filter(s => !s.ok);
     if (failed.length) toast(`Could not reach: ${failed.map(s => s.label).join(', ')}`);
     else if (force) toast(`${data.jobs.length} leads pulled from ${data.sources.length} boards`);
-    render();
-    if (!state.selectedId && window.innerWidth > 820 && state.visible[0]) select(state.visible[0].id, { open: false });
+    renderSources();
   } catch (err) {
-    if (!state.data) {
-      $('#list').innerHTML = `<div class="empty"><h3>Could not load leads</h3><p>${esc(err.message)}. Check your connection and try again.</p><button class="btn" data-action="retry">Try again</button></div>`;
-    } else toast(`Refresh failed: ${err.message}`);
+    if (!state.data) $('#grid').innerHTML = `<div class="empty"><h3>Could not load jobs</h3><p>${esc(err.message)}. Check your connection and try again.</p><button class="btn" data-action="retry">Try again</button></div>`;
+    else toast(`Refresh failed: ${err.message}`);
+    return;
   } finally {
+    state.loading = false;
     btn.disabled = false;
     btn.classList.remove('spinning');
   }
+  render();
 }
 
 // ---------- filters UI ----------
 function syncFilterControls() {
   const f = state.filters;
+  $('#country').innerHTML = COUNTRY_OPTIONS.map(([c, name]) => `<option value="${c}">${name}</option>`).join('') + '<option value="all">All countries</option>';
+  $('#country').value = f.country;
   document.querySelectorAll('.chips').forEach(group => {
     const list = f[group.dataset.filter];
     group.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', list.includes(c.dataset.value)));
@@ -569,58 +417,64 @@ function syncFilterControls() {
   $('#sort').value = f.sort;
 }
 
-function saveFilters() {
-  store.write(KEYS.filters, state.filters);
-}
-
-function select(id, { open = true } = {}) {
-  state.selectedId = id;
-  document.querySelectorAll('.card.selected').forEach(c => c.classList.remove('selected'));
-  const el = document.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
-  el?.classList.add('selected');
-  el?.scrollIntoView({ block: 'nearest' });
-  renderDetail();
-  $('#detail').scrollTop = 0;
-  if (open) document.body.classList.add('detail-open');
-}
-
-function move(delta) {
-  if (!state.visible.length) return;
-  const i = state.visible.findIndex(j => j.id === state.selectedId);
-  const next = state.visible[Math.max(0, Math.min(state.visible.length - 1, i + delta))] || state.visible[0];
-  select(next.id, { open: false });
-}
+const openSheet = () => { document.body.classList.add('sheet-open'); $('#sheet').setAttribute('aria-hidden', 'false'); };
+const closeSheet = () => { document.body.classList.remove('sheet-open'); $('#sheet').setAttribute('aria-hidden', 'true'); };
 
 function exportCsv() {
-  const cols = ['score', 'fit', 'status', 'title', 'company', 'salary', 'type', 'location', 'emails', 'phones', 'url', 'applyUrl', 'source', 'postedAt', 'note'];
+  const cols = ['score', 'fit', 'status', 'title', 'company', 'salary', 'type', 'location', 'countries', 'emails', 'phones', 'url', 'applyUrl', 'source', 'postedAt', 'note'];
   const rows = state.visible.map(j => [
-    j.score, j.fit, statusOf(j.id) || '', j.title, j.company, j.salary || '', j.type, j.location,
+    j.score, j.fit, statusOf(j.id) || '', j.title, j.company, j.salary || '', j.type, j.location, (j.countries || []).join(' '),
     j.contacts.emails.join(' '), j.contacts.phones.map(p => p.display).join(' '), j.url, j.applyUrl || '', j.sourceLabel, j.postedAt || '', rec(j.id).note || '',
   ]);
   const csv = [cols, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  a.download = `jobalert-${state.view}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `jobalert-${state.tab}-${state.filters.country}-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
 
+function setTab(tab) {
+  state.tab = tab;
+  history.replaceState(null, '', `#${tab}`);
+  if (tab === 'social') syncSocial();
+  render();
+}
+
 // ---------- events ----------
+// Hand the job to the job page before the new tab opens (covers middle-click too).
+function onOfferOpen(e) {
+  const a = e.target.closest('[data-act="offer"]');
+  if (!a) return;
+  const j = findJob(a.closest('.tile').dataset.id);
+  if (j) peekJob(j);
+}
+$('#grid').addEventListener('auxclick', e => { onOfferOpen(e); markOpened(e); });
+
+function markOpened(e) {
+  const link = e.target.closest('[data-open]');
+  if (!link) return;
+  const id = link.closest('.tile').dataset.id;
+  state.opened[id] = Date.now();
+  for (const [k, t] of Object.entries(state.opened)) if (Date.now() - t > 60 * 86400_000) delete state.opened[k];
+  store.write(KEYS.opened, state.opened);
+  link.closest('.tile').classList.add('viewed');
+}
+
 document.addEventListener('click', e => {
-  const t = e.target.closest('button, a, [data-copy]');
+  if (e.target.closest('[data-act="offer"]')) return onOfferOpen(e);
+  if (e.target.closest('[data-open]')) return markOpened(e);
+  const t = e.target.closest('button');
   if (!t) return;
 
-  if (t.matches('.card')) return select(t.dataset.id);
-  if (t.dataset.view) {
-    state.view = t.dataset.view;
-    closeFilters();
+  if (t.dataset.tab) return setTab(t.dataset.tab);
+  if (t.dataset.pipe) { state.filters.pipe = t.dataset.pipe; return render(); }
+  if (t.dataset.platform) { state.filters.platform = t.dataset.platform; return render(); }
+  if (t.dataset.act) {
+    const id = t.closest('.tile').dataset.id;
+    const now = setStatus(id, t.dataset.act, findJob(id));
+    toast(now ? `Moved to ${STATUS_LABEL[now]}` : state.tab === 'pipeline' ? 'Removed from the pipeline' : 'Moved back to the grid');
     return render();
-  }
-  if (t.dataset.copy) return copy(t.dataset.copy);
-  if (t.dataset.status && state.selectedId) return setStatus(state.selectedId, t.dataset.status);
-  if (t.dataset.send && state.selectedId) {
-    if (t.dataset.send !== 'apply') e.preventDefault();
-    return sendDraft(t.dataset.send, state.selectedId);
   }
   if (t.closest('.chips')) {
     const key = t.closest('.chips').dataset.filter;
@@ -631,36 +485,36 @@ document.addEventListener('click', e => {
     return render();
   }
   switch (t.dataset.action || t.id) {
-    case 'draft': return draftOffer(state.selectedId);
-    case 'draft-to': return draftOffer(state.selectedId, t.dataset.email);
-    case 'toggle-desc': {
-      const d = $('#desc');
-      d.classList.toggle('clamped');
-      t.textContent = d.classList.contains('clamped') ? 'Show full description' : 'Show less';
-      return;
-    }
-    case 'close-detail': return document.body.classList.remove('detail-open');
+    case 'show-anywhere': state.filters.anywhere = true; return render();
     case 'retry': return load();
     case 'reset':
     case 'btn-reset':
-      state.filters = { ...DEFAULT_FILTERS };
+      state.filters = { ...DEFAULT_FILTERS, country: state.filters.country, anywhere: state.filters.anywhere, sort: state.filters.sort };
       syncFilterControls();
+      renderSources();
       return render();
-    case 'btn-refresh': return load({ force: true });
+    case 'btn-refresh': return state.tab === 'social' ? syncSocial() : load({ force: true });
+    case 'btn-scan': return scanSocial();
     case 'btn-export': return exportCsv();
-    case 'btn-help': return $('#help').showModal();
-    case 'btn-filters': return document.body.classList.add('filters-open');
-    case 'btn-close-filters': return closeFilters();
+    case 'btn-filters': return openSheet();
+    case 'btn-close-sheet': return closeSheet();
   }
 });
 
-const closeFilters = () => document.body.classList.remove('filters-open');
-$('#scrim').addEventListener('click', closeFilters);
-
-$('#q').addEventListener('input', e => {
-  state.q = e.target.value.trim();
-  render();
+$('#scrim').addEventListener('click', closeSheet);
+window.addEventListener('hashchange', () => {
+  const tab = location.hash.slice(1);
+  if (TABS.includes(tab) && tab !== state.tab) setTab(tab);
 });
+$('#q').addEventListener('input', e => { state.q = e.target.value.trim(); render(); });
+$('#country').addEventListener('change', e => {
+  state.filters.country = e.target.value;
+  state.filters.platform = 'all';
+  if (state.tab === 'social') syncSocial();
+  load();
+});
+$('#anywhere').addEventListener('change', e => { state.filters.anywhere = e.target.checked; render(); });
+$('#quick-q').addEventListener('change', renderSocialPanel);
 $('#minScore').addEventListener('input', e => {
   state.filters.minScore = Number(e.target.value);
   $('#minScoreOut').textContent = state.filters.minScore ? `${state.filters.minScore}+` : 'Any';
@@ -671,24 +525,16 @@ for (const id of ['locOnly', 'hasPay', 'newOnly']) {
 }
 $('#days').addEventListener('change', e => { state.filters.days = Number(e.target.value); render(); });
 $('#sort').addEventListener('change', e => { state.filters.sort = e.target.value; render(); });
-$('#sources').addEventListener('change', e => {
+$('#sources').addEventListener('change', () => {
   const boxes = [...document.querySelectorAll('#sources input')];
   const on = boxes.filter(b => b.checked).map(b => b.dataset.source);
   state.filters.sources = on.length === boxes.length ? null : on;
   render();
 });
 
-// Notes and draft edits save as you type.
-let saveTimer;
-$('#detail').addEventListener('input', e => {
-  const id = state.selectedId;
-  if (!id) return;
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    if (e.target.id === 'note') updateRec(id, { note: e.target.value });
-    else if (['to', 'subject', 'body'].includes(e.target.id)) updateRec(id, { draft: { ...rec(id).draft, ...currentDraft() } });
-    else if (e.target.id === 'extra') updateRec(id, { extra: e.target.value });
-  }, 300);
+// The job page in another tab saves, contacts or hides leads: reflect that here.
+window.addEventListener('storage', e => {
+  if (e.key === KEYS.crm) { reloadCrm(); render(); }
 });
 
 document.addEventListener('keydown', e => {
@@ -696,38 +542,16 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape') e.target.blur();
     return;
   }
-  if (e.metaKey || e.ctrlKey || e.altKey || $('#help').open) return;
-  const id = state.selectedId;
-  const k = e.key;
-  if (k === '/') { e.preventDefault(); return $('#q').focus(); }
-  if (k === 'j' || k === 'ArrowDown') { e.preventDefault(); return move(1); }
-  if (k === 'k' || k === 'ArrowUp') { e.preventDefault(); return move(-1); }
-  if (k === '?') return $('#help').showModal();
-  if (k === 'Escape') { closeFilters(); return document.body.classList.remove('detail-open'); }
-  if (/^[1-5]$/.test(k)) { state.view = VIEWS[Number(k) - 1].id; return render(); }
-  if (!id) return;
-  const keep = () => {
-    // After triaging, move to the next lead so you can keep going with the keyboard.
-    const i = state.visible.findIndex(j => j.id === id);
-    const after = state.visible[i + 1] || state.visible[i - 1];
-    return after?.id;
-  };
-  if (k === 's') return setStatus(id, 'saved');
-  if (k === 'c') return setStatus(id, 'contacted');
-  if (k === 'r') return setStatus(id, 'replied');
-  if (k === 'h') {
-    const next = keep();
-    setStatus(id, 'hidden');
-    if (next && state.view !== 'hidden') select(next, { open: false });
-    return;
-  }
-  if (k === 'o') { const j = state.jobs.get(id); if (j) window.open(safeUrl(j.url), '_blank', 'noopener'); return; }
-  if (k === 'd') return draftOffer(id);
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === '/') { e.preventDefault(); $('#q').focus(); }
+  if (e.key === 'Escape') closeSheet();
 });
 
 // ---------- start ----------
+boot();
 syncFilterControls();
 render();
 load();
+if (state.tab === 'social') syncSocial();
 // Pick up new posts while the tab stays open.
-setInterval(() => { if (document.visibilityState === 'visible') load(); }, 30 * 60_000);
+setInterval(() => { if (document.visibilityState === 'visible') load({ refetch: true }); }, 30 * 60_000);

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lead · JobAlert</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231d5fd1'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <script>try { const t = localStorage.getItem('jobalert.theme'); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body class="jobpage">
+  <header class="topbar">
+    <a class="brand" href="./"><span class="brand-mark"><svg><use href="#i-check"/></svg></span><span>JobAlert</span></a>
+    <a class="btn btn-ghost" href="./">← All leads</a>
+    <div class="top-actions">
+      <button id="btn-theme" class="icon-btn" aria-label="Switch theme"></button>
+    </div>
+  </header>
+  <main id="page" class="page"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="assets/job.js" type="module"></script>
+</body>
+</html>

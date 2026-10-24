@@ -69,7 +69,7 @@ export async function POST(request) {
     `Pay: ${job.salary || 'not stated'}`,
     `Type: ${job.type || 'unspecified'}`,
     `Location: ${job.location || 'not stated'}`,
-    `How to contact: ${job.contactMethod === 'email' ? 'email' : job.contactMethod === 'signup' ? 'platform bid (they will read it as a proposal)' : 'application form or link'}`,
+    `How to contact: ${job.contactMethod === 'email' ? 'email' : job.kind === 'social' ? `a comment or direct message on their ${job.sourceLabel} post (keep it short, under 100 words, and conversational)` : job.contactMethod === 'signup' ? 'platform bid (they will read it as a proposal)' : 'application form or link'}`,
     job.requirements?.length ? `Requirements:\n${job.requirements.map(r => `- ${r}`).join('\n')}` : '',
     `Full post:\n${clip(String(job.description || ''), 7000)}`,
   ].filter(Boolean).join('\n');
