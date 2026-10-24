@@ -1,0 +1,17 @@
+{
+  "name": "jobalert",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal job-lead CRM: pulls no-sign-up job feeds, ranks them against my skills, and drafts offers with Claude.",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "check": "node scripts/check-feeds.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.2.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

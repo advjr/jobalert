@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JobAlert</title>
+  <meta name="description" content="Job leads matched to my skills, with direct contacts and AI-drafted offers.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f766e'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.9-3.6L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.9 3.6L20 15"/><path d="M20 20v-5h-5"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16l-6 8v5l-4 2v-7z"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5 9-11"/></symbol>
+    <symbol id="i-reply" viewBox="0 0 24 24"><path d="M9 14l-5-5 5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v5"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 6.1A10 10 0 0 1 12 6c5 0 9 6 9 6a17 17 0 0 1-3 3.4M6.5 7.6A17 17 0 0 0 3 12s4 6 9 6a9 9 0 0 0 3.4-.7"/><path d="M9.9 10a3 3 0 0 0 4.1 4.1"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M21 3L10 14"/><path d="M21 3l-7 18-4-7-7-4z"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2-8h12l2 8v6H4z"/><path d="M4 13h5l1 2h4l1-2h5"/></symbol>
+    <symbol id="i-whatsapp" viewBox="0 0 24 24"><path d="M4 20l1.3-4A8 8 0 1 1 8 19z"/><path d="M9 9.5c.3 2 2.5 4.3 4.5 4.8l1-1.2 1.8.8c-.3 1.3-1.3 2-2.6 1.8C10.7 15.2 8.6 13 8 10.2c-.2-1.3.5-2.3 1.8-2.6l.8 1.8z"/></symbol>
+  </svg>
+
+  <header class="topbar">
+    <button class="icon-btn only-narrow" id="btn-filters" aria-label="Show filters"><svg><use href="#i-filter"/></svg></button>
+    <div class="brand"><span class="brand-mark"><svg><use href="#i-check"/></svg></span><span>JobAlert</span></div>
+    <label class="search">
+      <svg><use href="#i-search"/></svg>
+      <input id="q" type="search" placeholder="Search title, company or skill" autocomplete="off">
+      <kbd class="only-wide">/</kbd>
+    </label>
+    <div class="top-actions">
+      <span id="updated" class="muted only-wide"></span>
+      <button id="btn-refresh" class="btn"><svg><use href="#i-refresh"/></svg><span class="only-wide">Refresh</span></button>
+      <button id="btn-help" class="icon-btn only-wide" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar" aria-label="Views and filters">
+      <div class="sidebar-head only-narrow">
+        <strong>Views and filters</strong>
+        <button class="icon-btn" id="btn-close-filters" aria-label="Close"><svg><use href="#i-x"/></svg></button>
+      </div>
+
+      <nav class="views" id="views"></nav>
+
+      <section class="fgroup">
+        <h3>How you can reach them</h3>
+        <div class="chips" data-filter="contact">
+          <button class="chip" data-value="email"><svg><use href="#i-mail"/></svg>Email found</button>
+          <button class="chip" data-value="apply"><svg><use href="#i-link"/></svg>Apply link, no account</button>
+          <button class="chip" data-value="signup"><svg><use href="#i-lock"/></svg>Needs sign-up</button>
+        </div>
+      </section>
+
+      <section class="fgroup">
+        <h3>Job type</h3>
+        <div class="chips" data-filter="types">
+          <button class="chip" data-value="Project">Project</button>
+          <button class="chip" data-value="Contract">Contract</button>
+          <button class="chip" data-value="Part-time">Part-time</button>
+          <button class="chip" data-value="Full-time">Full-time</button>
+          <button class="chip" data-value="Unspecified">Not stated</button>
+        </div>
+      </section>
+
+      <section class="fgroup">
+        <h3>Minimum match <output id="minScoreOut"></output></h3>
+        <input type="range" id="minScore" min="0" max="90" step="5">
+        <div class="range-legend"><span>Anything</span><span>Great fits only</span></div>
+      </section>
+
+      <section class="fgroup">
+        <h3>More</h3>
+        <label class="check"><input type="checkbox" id="locOnly"> Hide jobs locked to other countries</label>
+        <label class="check"><input type="checkbox" id="hasPay"> Pay is listed</label>
+        <label class="check"><input type="checkbox" id="newOnly"> New since my last visit</label>
+        <label class="select-row">Posted within
+          <select id="days">
+            <option value="2">2 days</option>
+            <option value="7">7 days</option>
+            <option value="14">14 days</option>
+            <option value="35">30 days</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="fgroup">
+        <h3>Sources</h3>
+        <div id="sources" class="sources"></div>
+      </section>
+
+      <button class="btn btn-ghost btn-block" id="btn-reset">Reset filters</button>
+    </aside>
+
+    <main class="list-pane" aria-label="Job leads">
+      <div class="list-head">
+        <div id="summary" class="summary"></div>
+        <div class="list-tools">
+          <select id="sort" aria-label="Sort by">
+            <option value="score">Best match</option>
+            <option value="newest">Newest</option>
+            <option value="contact">Easiest to contact</option>
+            <option value="pay">Pay listed first</option>
+          </select>
+          <button class="icon-btn" id="btn-export" title="Export this list to CSV" aria-label="Export CSV"><svg><use href="#i-download"/></svg></button>
+        </div>
+      </div>
+      <div id="list" class="list" role="listbox" aria-label="Leads"></div>
+    </main>
+
+    <section class="detail-pane" id="detail" aria-label="Lead details"></section>
+  </div>
+
+  <div class="scrim" id="scrim"></div>
+
+  <dialog id="help">
+    <h2>Keyboard shortcuts</h2>
+    <dl class="keys">
+      <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next / previous lead</dd>
+      <dt><kbd>s</kbd></dt><dd>Save lead</dd>
+      <dt><kbd>c</kbd></dt><dd>Mark as contacted</dd>
+      <dt><kbd>r</kbd></dt><dd>Mark as replied</dd>
+      <dt><kbd>h</kbd></dt><dd>Hide (not a fit)</dd>
+      <dt><kbd>o</kbd></dt><dd>Open job post</dd>
+      <dt><kbd>d</kbd></dt><dd>Draft an offer</dd>
+      <dt><kbd>/</kbd></dt><dd>Search</dd>
+      <dt><kbd>1</kbd> to <kbd>5</kbd></dt><dd>Switch view</dd>
+    </dl>
+    <form method="dialog"><button class="btn btn-primary">Got it</button></form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="assets/app.js" type="module"></script>
+</body>
+</html>
