@@ -8,9 +8,18 @@ There is no database. Leads are fetched live from the boards on each load, and t
 
 - **Jobs** fills the screen with tiles. Click a tile to open its details page in a new tab: position, salary, job type, location, contacts, the full description, an AI-drafted offer, notes, and a button to the original post. The link icon on a tile goes straight to the original post.
 - The country picker defaults to **Australia**. Pick another country or **All countries**. "Worldwide remote too" adds remote jobs that are open to most countries; in Best match, jobs in the chosen country still rank first.
-- **Social posts** lists LinkedIn, Facebook and Instagram posts from people asking for your services. **Scan with AI** has Claude search posts that search engines have indexed (roughly US$0.30 to US$0.80 per scan, needs `ANTHROPIC_API_KEY`). The quick-search buttons open each platform's own search in your logged-in browser.
+- **Social posts** lists LinkedIn, Facebook and Instagram posts from people asking for your services:
+  - **Alert feeds (free, no API key):** press **Set up feeds**, create a Google Alert for one of the suggested searches (for example `site:facebook.com/groups "looking for" "virtual assistant" Australia`) with *Deliver to: RSS feed*, and paste the feed link. New public posts that Google indexes show up here. Talkwalker Alerts, FetchRSS and RSS.app feed links work too. Your feed list is kept in the browser.
+  - **Quick searches** open each platform's own search in your logged-in browser, which is the only way to see private Facebook groups.
+  - **Scan with AI** (only shown when `ANTHROPIC_API_KEY` is set) has Claude search for posts, roughly US$0.30 to US$0.80 per scan.
 - **Pipeline** holds everything you saved, contacted, got replies from or hid.
 - The moon/sun button switches light and dark mode. It follows your system setting until you choose.
+
+## Install it as a desktop app
+
+JobAlert is an installable web app. Open it in Chrome or Edge and press **Install app** in the header (or the install icon at the right end of the address bar). It then opens in its own window from the Start menu, taskbar or desktop, like any other app, and updates itself whenever you deploy.
+
+Install it from your Vercel URL so it works without the local server running. If you install from `http://localhost:3000`, `npm run dev` has to be running for it to load leads.
 
 ## Run it locally
 

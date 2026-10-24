@@ -13,6 +13,8 @@ export const KEYS = {
   opened: 'jobalert.opened.v1',
   social: 'jobalert.social.v1',
   profile: 'jobalert.profile.v1',
+  feeds: 'jobalert.feeds.v1',
+  feedPosts: 'jobalert.feedposts.v1',
 };
 
 export const COUNTRY_OPTIONS = [
@@ -165,12 +167,42 @@ const SPRITE = `<svg width="0" height="0" style="position:absolute" aria-hidden=
   <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
   <symbol id="i-briefcase" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18"/></symbol>
   <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></symbol>
+  <symbol id="i-rss" viewBox="0 0 24 24"><path d="M5 11a8 8 0 0 1 8 8M5 5a14 14 0 0 1 14 14"/><circle cx="6" cy="18" r="1.5"/></symbol>
+  <symbol id="i-install" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M12 7v6M9 10l3 3 3-3"/></symbol>
   <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
 </svg>`;
+
+// ---------- desktop app (PWA) ----------
+// Chrome and Edge offer an install prompt; the "Install app" button shows only when one is available.
+let installPrompt = null;
+
+function setupInstall() {
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  const btn = $('#btn-install');
+  if (!btn) return;
+  window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault();
+    installPrompt = e;
+    btn.hidden = false;
+  });
+  window.addEventListener('appinstalled', () => {
+    installPrompt = null;
+    btn.hidden = true;
+    toast('JobAlert is installed. Open it from your Start menu or desktop.');
+  });
+  btn.addEventListener('click', async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    btn.hidden = true;
+  });
+}
 
 export function boot() {
   document.body.insertAdjacentHTML('afterbegin', SPRITE);
   syncThemeButton();
   media.addEventListener('change', syncThemeButton);
   $('#btn-theme')?.addEventListener('click', toggleTheme);
+  setupInstall();
 }

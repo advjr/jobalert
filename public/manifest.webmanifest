@@ -1,0 +1,21 @@
+{
+  "name": "JobAlert",
+  "short_name": "JobAlert",
+  "description": "Job leads and social posts matched to your skills, with contacts and AI-drafted offers.",
+  "id": "/",
+  "start_url": "/#jobs",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f3f6fb",
+  "theme_color": "#1d5fd1",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Jobs", "url": "/#jobs" },
+    { "name": "Social posts", "url": "/#social" },
+    { "name": "Pipeline", "url": "/#pipeline" }
+  ]
+}

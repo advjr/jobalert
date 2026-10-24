@@ -1,10 +1,11 @@
-// JobAlert dashboard: a grid of job and social-post tiles. Clicking a tile opens the original
-// post in a new tab; "Offer" opens the job page (contacts, AI offer, notes) in a new tab.
-// Leads come live from /api/jobs and /api/social; your pipeline lives in localStorage.
+// JobAlert dashboard: a grid of job and social-post tiles. Clicking a tile opens its job page
+// (details, contacts, AI offer, notes) in a new tab; the link icon goes to the original post.
+// Leads come live from /api/jobs, /api/feeds (your alert feeds) and /api/social (optional AI scan);
+// your pipeline lives in localStorage.
 
 import {
   $, KEYS, COUNTRY_OPTIONS, countryName, STATUS_LABEL, store, reloadCrm, allRecs, rec, statusOf, setStatus, needsFollowUp,
-  peekJob, jobPageUrl, esc, safeUrl, icon, fitClass, ago, toast, boot,
+  peekJob, jobPageUrl, esc, safeUrl, icon, fitClass, ago, toast, copy, boot,
 } from './core.js';
 
 const TABS = ['jobs', 'social', 'pipeline'];
@@ -33,7 +34,10 @@ const state = {
   filters: { ...DEFAULT_FILTERS, ...store.read(KEYS.filters, {}) },
   payloads: new Map(), // country -> /api/jobs payload
   data: null,
-  social: store.read(KEYS.social, {}), // country -> { scannedAt, posts }
+  social: store.read(KEYS.social, {}), // country -> { scannedAt, posts } from the AI scan
+  feeds: store.read(KEYS.feeds, []), // [{ url }] alert feeds you added
+  feedData: store.read(KEYS.feedPosts, { checkedAt: null, feeds: [], posts: [] }),
+  checkingFeeds: false,
   ai: store.read(KEYS.profile, {}).ai ?? null,
   scanning: false,
   loading: false,
@@ -51,12 +55,18 @@ if (!state.meta) {
 const previousVisit = state.meta.lastVisit;
 
 // ---------- data helpers ----------
-const socialPosts = () => state.social[state.filters.country]?.posts || [];
+// Alert-feed posts plus any AI scan for this country, one tile per post URL.
+function socialPosts() {
+  const byUrl = new Map();
+  for (const p of [...state.feedData.posts, ...(state.social[state.filters.country]?.posts || [])]) if (!byUrl.has(p.url)) byUrl.set(p.url, p);
+  return [...byUrl.values()];
+}
 
 function liveJobs() {
   const map = new Map();
   for (const p of state.payloads.values()) for (const j of p.jobs) map.set(j.id, j);
   for (const s of Object.values(state.social)) for (const p of s.posts || []) map.set(p.id, p);
+  for (const p of state.feedData.posts) map.set(p.id, p);
   return map;
 }
 
@@ -250,7 +260,11 @@ function renderGrid() {
   if (!state.visible.length) {
     const msg = {
       jobs: ['No jobs match these filters', state.hiddenWorldwide ? 'Turn on "Worldwide remote too", pick another country, or reset the filters.' : 'Pick another country, lower the minimum match, or reset the filters.'],
-      social: state.scanning ? ['Scanning…', 'Claude is searching LinkedIn, Facebook and Instagram posts. This takes a minute or two.'] : ['No posts yet', state.ai === false ? 'The AI scan needs ANTHROPIC_API_KEY. Meanwhile, use the quick searches above.' : 'Press "Scan with AI" to look for fresh posts, or use the quick searches above.'],
+      social: state.scanning || state.checkingFeeds
+        ? ['Checking for posts…', state.scanning ? 'Claude is searching LinkedIn, Facebook and Instagram posts. This takes a minute or two.' : 'Reading your alert feeds.']
+        : state.feeds.length
+          ? ['No posts in your feeds yet', 'Google Alerts only adds posts as Google finds them, so new ones can take a day or two. Add more searches, or use the quick searches above.']
+          : ['No posts yet', 'Press "Set up feeds" to get public Facebook group and LinkedIn posts from Google Alerts for free, or use the quick searches above.'],
       pipeline: {
         saved: ['Nothing saved yet', 'Use the bookmark on a tile to keep it here.'],
         contacted: ['No one contacted yet', 'Sending an offer from the job page moves it here.'],
@@ -295,16 +309,24 @@ function quickLinks(term) {
 function renderSocialPanel() {
   const scan = state.social[state.filters.country];
   const where = countryName(state.filters.country);
-  let note;
-  if (state.ai === false) note = 'The AI scan is off: add ANTHROPIC_API_KEY to turn it on.';
-  else if (state.scanning) note = `Searching public posts for ${where}. This takes a minute or two…`;
-  else if (scan?.scannedAt) note = `Last scan for ${where}: ${ago(scan.scannedAt)}, ${scan.posts.length} posts found. Each scan costs roughly US$0.30 to US$0.80 in API credit.`;
-  else note = `Claude searches public LinkedIn, Facebook group and Instagram posts that search engines have indexed. Each scan costs roughly US$0.30 to US$0.80 in API credit.`;
-  $('#scan-note').textContent = note;
+  const fd = state.feedData;
+  const n = state.feeds.length;
+  $('#feeds-note').textContent = state.checkingFeeds
+    ? `Checking ${n} feed${n === 1 ? '' : 's'}…`
+    : n
+      ? `${n} feed${n === 1 ? '' : 's'} · ${fd.posts.length} posts${fd.checkedAt ? ` · checked ${ago(fd.checkedAt)}` : ''}`
+      : 'New public posts from Google Alerts, delivered here. Free, no API key.';
+  $('#btn-feeds').querySelector('span').textContent = n ? 'Manage feeds' : 'Set up feeds';
+
+  // The AI scan is optional: only shown when the server has an API key.
   const btn = $('#btn-scan');
-  btn.disabled = state.scanning || state.ai === false;
+  btn.hidden = state.ai !== true;
+  btn.disabled = state.scanning;
   btn.classList.toggle('spinning', state.scanning);
-  btn.querySelector('span').textContent = state.scanning ? 'Scanning…' : scan?.scannedAt ? 'Scan again' : 'Scan with AI';
+  btn.querySelector('span').textContent = state.scanning ? 'Scanning…' : 'Scan with AI';
+  $('#scan-note').textContent = state.ai !== true ? '' : state.scanning
+    ? `AI scan: searching public posts for ${where}…`
+    : scan?.scannedAt ? `AI scan for ${where}: ${ago(scan.scannedAt)}, ${scan.posts.length} posts (about US$0.30–0.80 per scan).` : 'AI scan: about US$0.30–0.80 per scan.';
   const sel = $('#quick-q');
   if (!sel.options.length) sel.innerHTML = QUICK_TERMS.map(t => `<option>${esc(t)}</option>`).join('');
   $('#quick-links').innerHTML = quickLinks(sel.value)
@@ -337,8 +359,86 @@ function saveScan(country, data) {
   store.write(KEYS.social, state.social);
 }
 
+// ---------- alert feeds (Google Alerts and similar) ----------
+const FEED_HOSTS = [/^https:\/\/www\.google\.[a-z.]+\/alerts\/feeds\//i, /^https:\/\/alerts\.talkwalker\.com\//i, /^https:\/\/fetchrss\.com\/rss\//i, /^https:\/\/rss\.app\/feeds\//i];
+const SUGGEST_TERMS = ['virtual assistant', 'HubSpot', 'GoHighLevel', 'Zapier', 'CRM', 'Shopify', 'WordPress', 'Klaviyo', 'automation', 'executive assistant'];
+
+async function checkFeeds({ quiet = true } = {}) {
+  if (!state.feeds.length || state.checkingFeeds) return;
+  state.checkingFeeds = true;
+  render();
+  try {
+    const res = await fetch('/api/feeds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urls: state.feeds.map(f => f.url) }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    state.feedData = { checkedAt: data.checkedAt, feeds: data.feeds, posts: data.posts };
+    markSeen(data.posts);
+    store.write(KEYS.feedPosts, state.feedData);
+    const failed = data.feeds.filter(f => !f.ok);
+    if (failed.length) toast(`${failed.length} feed${failed.length === 1 ? '' : 's'} could not be read`);
+    else if (!quiet) toast(`${data.posts.length} posts from ${data.feeds.length} feed${data.feeds.length === 1 ? '' : 's'}`);
+  } catch (err) {
+    toast(`Feed check failed: ${err.message}`);
+  } finally {
+    state.checkingFeeds = false;
+    render();
+    renderFeedDialog();
+  }
+}
+
+function renderFeedDialog() {
+  const status = new Map(state.feedData.feeds.map(f => [f.url, f]));
+  $('#feed-list').innerHTML = state.feeds.length
+    ? state.feeds.map(f => {
+      const s = status.get(f.url);
+      const label = s?.title?.replace(/^Google Alert - /, '') || f.url;
+      return `<div class="feed-row">
+        <span class="dot ${s && !s.ok ? 'err' : s ? '' : 'idle'}" title="${esc(s ? (s.ok ? `${s.count} items` : s.error) : 'Not checked yet')}"></span>
+        <span class="feed-name" title="${esc(f.url)}">${esc(label)}</span>
+        <span class="n">${s?.ok ? s.count : ''}</span>
+        <button class="icon-btn sm" data-remove-feed="${esc(f.url)}" aria-label="Remove feed">${icon('i-x')}</button>
+      </div>`;
+    }).join('')
+    : '<p class="muted small">No feeds yet. Make one with the steps below.</p>';
+
+  const sel = $('#suggest-term');
+  if (!sel.options.length) sel.innerHTML = SUGGEST_TERMS.map(t => `<option>${esc(t)}</option>`).join('');
+  const term = sel.value;
+  const place = state.filters.country === 'all' ? '' : ` ${countryName(state.filters.country)}`;
+  const queries = [
+    `site:facebook.com/groups "looking for" "${term}"${place}`,
+    `site:facebook.com "anyone recommend" "${term}"${place}`,
+    `site:linkedin.com/posts "looking for" "${term}"${place}`,
+    `site:linkedin.com/posts "hiring" "${term}"${place}`,
+    `site:instagram.com "hiring" "${term}"${place}`,
+  ];
+  $('#suggest-list').innerHTML = queries.map(q => `<div class="suggest-row"><code>${esc(q)}</code><button class="btn btn-sm" data-copy-q="${esc(q)}">${icon('i-copy')}Copy</button></div>`).join('');
+}
+
+function addFeed(url) {
+  url = url.trim();
+  if (!FEED_HOSTS.some(re => re.test(url))) return toast('Paste a Google Alerts, Talkwalker, FetchRSS or RSS.app feed link.');
+  if (state.feeds.some(f => f.url === url)) return toast('That feed is already added.');
+  state.feeds.push({ url, addedAt: Date.now() });
+  store.write(KEYS.feeds, state.feeds);
+  $('#feed-url').value = '';
+  renderFeedDialog();
+  checkFeeds({ quiet: false });
+}
+
+function removeFeed(url) {
+  state.feeds = state.feeds.filter(f => f.url !== url);
+  store.write(KEYS.feeds, state.feeds);
+  state.feedData.posts = state.feedData.posts.filter(p => p.meta?.feedUrl !== url);
+  state.feedData.feeds = state.feedData.feeds.filter(f => f.url !== url);
+  store.write(KEYS.feedPosts, state.feedData);
+  renderFeedDialog();
+  render();
+}
+
 // The server may hold a newer scan than this browser (for example one run from another device).
 async function syncSocial() {
+  checkFeeds();
   const country = state.filters.country;
   try {
     const res = await fetch(`/api/social?country=${country}`);
@@ -463,6 +563,8 @@ document.addEventListener('click', e => {
   if (!t) return;
 
   if (t.dataset.tab) return setTab(t.dataset.tab);
+  if (t.dataset.removeFeed) return removeFeed(t.dataset.removeFeed);
+  if (t.dataset.copyQ) return copy(t.dataset.copyQ, 'Search copied');
   if (t.dataset.pipe) { state.filters.pipe = t.dataset.pipe; return render(); }
   if (t.dataset.platform) { state.filters.platform = t.dataset.platform; return render(); }
   if (t.dataset.act) {
@@ -490,6 +592,8 @@ document.addEventListener('click', e => {
       return render();
     case 'btn-refresh': return state.tab === 'social' ? syncSocial() : load({ force: true });
     case 'btn-scan': return scanSocial();
+    case 'btn-feeds': renderFeedDialog(); return $('#feeds-dialog').showModal();
+    case 'close-feeds': return $('#feeds-dialog').close();
     case 'btn-export': return exportCsv();
     case 'btn-filters': return openSheet();
     case 'btn-close-sheet': return closeSheet();
@@ -510,6 +614,10 @@ $('#country').addEventListener('change', e => {
 });
 $('#anywhere').addEventListener('change', e => { state.filters.anywhere = e.target.checked; render(); });
 $('#quick-q').addEventListener('change', renderSocialPanel);
+$('#suggest-term').addEventListener('change', renderFeedDialog);
+$('#feed-add').addEventListener('submit', e => { e.preventDefault(); addFeed($('#feed-url').value); });
+// Close the feeds dialog when clicking the dimmed backdrop.
+$('#feeds-dialog').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 $('#minScore').addEventListener('input', e => {
   state.filters.minScore = Number(e.target.value);
   $('#minScoreOut').textContent = state.filters.minScore ? `${state.filters.minScore}+` : 'Any';

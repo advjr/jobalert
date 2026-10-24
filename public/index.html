@@ -7,6 +7,9 @@
   <meta name="description" content="Job leads and social posts matched to my skills, with direct contacts and AI-drafted offers.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231d5fd1'/%3E%3Cg stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round' transform='translate(4 4)'%3E%3Crect x='3' y='7' width='18' height='13' rx='2'/%3E%3Cpath d='M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18'/%3E%3C/g%3E%3C/svg%3E">
   <script>try { const t = localStorage.getItem('jobalert.theme'); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#1d5fd1">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="assets/styles.css">
 </head>
 <body class="dash">
@@ -18,6 +21,7 @@
       <button class="tab" role="tab" data-tab="pipeline"><svg><use href="#i-layers"/></svg><span>Pipeline</span><span class="n" id="n-pipeline"></span></button>
     </nav>
     <div class="top-actions">
+      <button id="btn-install" class="btn" hidden title="Install JobAlert as a desktop app"><svg><use href="#i-install"/></svg><span>Install app</span></button>
       <label class="search">
         <svg><use href="#i-search"/></svg>
         <input id="q" type="search" placeholder="Search" autocomplete="off" aria-label="Search title, company or skill">
@@ -51,10 +55,14 @@
   <section class="social-panel" id="social-panel" hidden>
     <div class="sp-card">
       <div class="sp-text">
-        <h2>Posts from people looking for your services</h2>
-        <p id="scan-note" class="muted"></p>
+        <h2>Alert feeds <span class="free">Free</span></h2>
+        <p id="feeds-note" class="muted"></p>
+        <p id="scan-note" class="muted small"></p>
       </div>
-      <button class="btn btn-primary" id="btn-scan"><svg><use href="#i-spark"/></svg><span>Scan with AI</span></button>
+      <div class="sp-buttons">
+        <button class="btn btn-primary" id="btn-feeds"><svg><use href="#i-rss"/></svg><span>Set up feeds</span></button>
+        <button class="btn" id="btn-scan" hidden><svg><use href="#i-spark"/></svg><span>Scan with AI</span></button>
+      </div>
     </div>
     <div class="sp-card sp-quick">
       <div class="sp-text">
@@ -123,6 +131,36 @@
     </div>
   </aside>
   <div class="scrim" id="scrim"></div>
+
+  <dialog id="feeds-dialog" class="feeds-dialog" aria-labelledby="feeds-title">
+    <div class="dlg-head">
+      <h2 id="feeds-title">Alert feeds</h2>
+      <button class="icon-btn" data-action="close-feeds" aria-label="Close"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="dlg-body">
+      <p class="muted">Google Alerts can email or feed you new public posts that match a search, including Facebook group and LinkedIn posts that Google has indexed. Set an alert to deliver to an RSS feed, paste the feed link here, and new posts show up in this tab. Free, no API key.</p>
+
+      <h3>Your feeds</h3>
+      <div id="feed-list" class="feed-list"></div>
+      <form class="feed-add" id="feed-add">
+        <input id="feed-url" type="url" placeholder="https://www.google.com/alerts/feeds/…" aria-label="Feed link" required>
+        <button class="btn btn-primary" type="submit">Add feed</button>
+      </form>
+      <p class="muted small">Accepted: Google Alerts, Talkwalker Alerts, FetchRSS and RSS.app feed links.</p>
+
+      <h3>How to make one (2 minutes)</h3>
+      <ol class="steps">
+        <li>Open <a href="https://www.google.com/alerts" target="_blank" rel="noopener noreferrer">Google Alerts</a> and paste one of the searches below.</li>
+        <li>Click <b>Show options</b>, set <b>How often</b> to "As-it-happens", <b>Sources</b> to "Automatic", and <b>Deliver to</b> to "RSS feed". Click <b>Create alert</b>.</li>
+        <li>Click the RSS icon next to the new alert, copy the page address, and add it above.</li>
+      </ol>
+      <div class="suggest">
+        <select id="suggest-term" aria-label="Service"></select>
+        <div id="suggest-list" class="suggest-list"></div>
+      </div>
+      <p class="muted small">Also free: <a href="https://alerts.talkwalker.com" target="_blank" rel="noopener noreferrer">Talkwalker Alerts</a> (same idea, sometimes catches different posts) and <a href="https://fetchrss.com" target="_blank" rel="noopener noreferrer">FetchRSS</a>, which turns a public Facebook page into a feed. Private Facebook groups can't be read by any of these: use the quick searches for those.</p>
+    </div>
+  </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="assets/app.js" type="module"></script>

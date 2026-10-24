@@ -15,7 +15,7 @@ function fromLocal() {
   const peeked = findPeek(id);
   if (peeked) return peeked;
   if (rec(id).snapshot) return { ...rec(id).snapshot, gone: true };
-  for (const scan of Object.values(store.read(KEYS.social, {}))) {
+  for (const scan of [store.read(KEYS.feedPosts, {}), ...Object.values(store.read(KEYS.social, {}))]) {
     const hit = (scan.posts || []).find(p => p.id === id);
     if (hit) return hit;
   }
