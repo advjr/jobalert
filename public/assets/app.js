@@ -227,14 +227,14 @@ function tile(j) {
       ${isNew(j) ? '<span class="new">New</span>' : ''}
       <span class="src">${esc(j.sourceLabel)} · ${ago(j.postedAt)}</span>
     </div>
-    <h3><a class="tile-link" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener noreferrer" data-open>${esc(j.title)}</a></h3>
+    <h3><a class="tile-link" href="${jobPageUrl(j.id)}" target="_blank" rel="noopener" data-open title="Details, contacts and offer">${esc(j.title)}</a></h3>
     <p class="company">${esc(j.company || 'Company not named')}${j.location ? ` · ${esc(j.location)}` : ''}</p>
     ${snippet ? `<p class="snippet">${esc(snippet)}</p>` : ''}
     <div class="tile-foot">
       <div class="meta">${meta.join('')}</div>
       <div class="tile-actions">
         <button class="icon-btn sm${s === 'saved' ? ' on' : ''}" data-act="saved" title="${s === 'saved' ? 'Saved' : 'Save'}" aria-label="Save">${icon('i-bookmark')}</button>
-        <a class="btn btn-sm" href="${jobPageUrl(j.id)}" target="_blank" rel="noopener" data-act="offer" title="Contacts, offer draft and notes">${icon('i-spark')}Offer</a>
+        <a class="icon-btn sm" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener noreferrer" title="Go to the original post on ${esc(j.sourceLabel)}" aria-label="Original post">${icon('i-link')}</a>
         <button class="icon-btn sm${s === 'hidden' ? ' on' : ''}" data-act="hidden" title="${s === 'hidden' ? 'Unhide' : 'Not a fit'}" aria-label="Hide">${icon('i-x')}</button>
       </div>
     </div>
@@ -442,28 +442,23 @@ function setTab(tab) {
 }
 
 // ---------- events ----------
-// Hand the job to the job page before the new tab opens (covers middle-click too).
-function onOfferOpen(e) {
-  const a = e.target.closest('[data-act="offer"]');
-  if (!a) return;
-  const j = findJob(a.closest('.tile').dataset.id);
-  if (j) peekJob(j);
-}
-$('#grid').addEventListener('auxclick', e => { onOfferOpen(e); markOpened(e); });
-
-function markOpened(e) {
+// Opening a tile hands the job to the job page before the new tab loads (covers middle-click too).
+function openTile(e) {
   const link = e.target.closest('[data-open]');
   if (!link) return;
   const id = link.closest('.tile').dataset.id;
+  const j = findJob(id);
+  if (j) peekJob(j);
   state.opened[id] = Date.now();
   for (const [k, t] of Object.entries(state.opened)) if (Date.now() - t > 60 * 86400_000) delete state.opened[k];
   store.write(KEYS.opened, state.opened);
   link.closest('.tile').classList.add('viewed');
 }
 
+$('#grid').addEventListener('auxclick', openTile);
+
 document.addEventListener('click', e => {
-  if (e.target.closest('[data-act="offer"]')) return onOfferOpen(e);
-  if (e.target.closest('[data-open]')) return markOpened(e);
+  if (e.target.closest('[data-open]')) return openTile(e);
   const t = e.target.closest('button');
   if (!t) return;
 

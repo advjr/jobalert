@@ -6,7 +6,7 @@ There is no database. Leads are fetched live from the boards on each load, and t
 
 ## Using the dashboard
 
-- **Jobs** fills the screen with tiles. Click a tile to open the original post in a new tab. **Offer** opens the lead's own page in a new tab: contacts, why it matches, the full post, an AI-drafted offer and notes.
+- **Jobs** fills the screen with tiles. Click a tile to open its details page in a new tab: position, salary, job type, location, contacts, the full description, an AI-drafted offer, notes, and a button to the original post. The link icon on a tile goes straight to the original post.
 - The country picker defaults to **Australia**. Pick another country or **All countries**. "Worldwide remote too" adds remote jobs that are open to most countries; in Best match, jobs in the chosen country still rank first.
 - **Social posts** lists LinkedIn, Facebook and Instagram posts from people asking for your services. **Scan with AI** has Claude search posts that search engines have indexed (roughly US$0.30 to US$0.80 per scan, needs `ANTHROPIC_API_KEY`). The quick-search buttons open each platform's own search in your logged-in browser.
 - **Pipeline** holds everything you saved, contacted, got replies from or hid.

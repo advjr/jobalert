@@ -91,8 +91,8 @@ function renderPage() {
       <a class="btn btn-primary open-post" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener noreferrer">${icon('i-link')}Open the original ${social ? 'post' : 'job post'} on ${esc(j.sourceLabel)}</a>
 
       <div class="facts">
-        ${social ? '' : `<div class="fact"><div class="k">Pay / offer</div><div class="v">${esc(j.salary || 'Not stated')}</div></div>
-        <div class="fact"><div class="k">Type</div><div class="v">${esc(j.type === 'Unspecified' ? 'Not stated' : j.type)}</div></div>`}
+        ${social ? '' : `<div class="fact"><div class="k">Salary / pay</div><div class="v">${esc(j.salary || 'Not stated')}</div></div>
+        <div class="fact"><div class="k">Job type</div><div class="v">${esc(j.type === 'Unspecified' ? 'Not stated' : j.type)}</div></div>`}
         <div class="fact"><div class="k">Location</div><div class="v">${esc(j.location || 'Not stated')}</div></div>
         <div class="fact"><div class="k">Posted</div><div class="v">${ago(j.postedAt)} · ${esc(j.sourceLabel)}</div></div>
         ${j.meta?.bids != null ? `<div class="fact"><div class="k">Bids so far</div><div class="v">${j.meta.bids}</div></div>` : ''}
